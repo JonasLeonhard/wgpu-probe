@@ -72,6 +72,11 @@ pub async fn run() {
     });
 }
 
+enum ActivePipeline {
+    One,
+    Two,
+}
+
 struct State<'a> {
     surface: wgpu::Surface<'a>,
     device: wgpu::Device,
@@ -79,6 +84,10 @@ struct State<'a> {
     config: wgpu::SurfaceConfiguration,
     size: winit::dpi::PhysicalSize<u32>,
     render_pipeline: wgpu::RenderPipeline,
+    second_pipeline: wgpu::RenderPipeline,
+
+    active_pipeline: ActivePipeline,
+    space_pressed: bool,
     // The window must be declared after the surface so
     // it gets dropped after it as the surface contains
     // unsafe references to the window's resources.
@@ -194,6 +203,52 @@ impl<'a> State<'a> {
             cache: None,     // 6.
         });
 
+        let second_shader =
+            device.create_shader_module(wgpu::include_wgsl!("shaders/second_shader.wgsl"));
+
+        let second_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Render Pipeline 2"),
+            layout: Some(&render_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &second_shader,
+                entry_point: "vs_main", // 1.
+                buffers: &[],           // 2.
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                // 3.
+                module: &second_shader,
+                entry_point: "fs_main",
+                targets: &[Some(wgpu::ColorTargetState {
+                    // 4.
+                    format: config.format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList, // 1.
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw, // 2.
+                cull_mode: Some(wgpu::Face::Back),
+                // Setting this to anything other than Fill requires Features::NON_FILL_POLYGON_MODE
+                polygon_mode: wgpu::PolygonMode::Fill,
+                // Requires Features::DEPTH_CLIP_CONTROL
+                unclipped_depth: false,
+                // Requires Features::CONSERVATIVE_RASTERIZATION
+                conservative: false,
+            },
+            depth_stencil: None, // 1.
+            multisample: wgpu::MultisampleState {
+                count: 1,                         // 2.
+                mask: !0,                         // 3.
+                alpha_to_coverage_enabled: false, // 4.
+            },
+            multiview: None, // 5.
+            cache: None,     // 6.
+        });
+
         Self {
             window,
             surface,
@@ -202,6 +257,9 @@ impl<'a> State<'a> {
             config,
             size,
             render_pipeline,
+            second_pipeline,
+            active_pipeline: ActivePipeline::One,
+            space_pressed: false,
         }
     }
 
@@ -220,6 +278,31 @@ impl<'a> State<'a> {
 
     fn input(&mut self, event: &WindowEvent) -> bool {
         match event {
+            WindowEvent::KeyboardInput {
+                event:
+                    KeyEvent {
+                        state,
+                        physical_key: PhysicalKey::Code(KeyCode::Space),
+                        ..
+                    },
+                ..
+            } => {
+                match state {
+                    ElementState::Pressed if !self.space_pressed => {
+                        self.space_pressed = true;
+                        if let ActivePipeline::One = self.active_pipeline {
+                            self.active_pipeline = ActivePipeline::Two;
+                        } else {
+                            self.active_pipeline = ActivePipeline::One;
+                        }
+                    }
+                    ElementState::Released => {
+                        self.space_pressed = false;
+                    }
+                    _ => {}
+                }
+                true
+            }
             _ => false,
         }
     }
@@ -262,7 +345,12 @@ impl<'a> State<'a> {
                 timestamp_writes: None,
             });
 
-            render_pass.set_pipeline(&self.render_pipeline); // 2.
+            if let ActivePipeline::One = self.active_pipeline {
+                render_pass.set_pipeline(&self.render_pipeline);
+            } else {
+                render_pass.set_pipeline(&self.second_pipeline);
+            }
+
             render_pass.draw(0..3, 0..1); // 3.
         }
 
